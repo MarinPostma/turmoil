@@ -1,5 +1,12 @@
-use std::{io::Result, net::SocketAddr, sync::Arc};
+use std::{
+    future::{poll_fn, Future},
+    io::Result,
+    net::SocketAddr,
+    sync::Arc,
+    task::{ready, Context, Poll},
+};
 
+use futures::pin_mut;
 use tokio::sync::Notify;
 
 use crate::{
@@ -48,6 +55,13 @@ impl TcpListener {
     /// established, the corresponding [`TcpStream`] and the remote peer’s
     /// address will be returned.
     pub async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
+        poll_fn(|cx| self.poll_accept(cx)).await
+    }
+
+    /// Polls to accept a new incoming connection to this listener.
+    ///
+    /// If there is no connection to accept, Poll::Pending is returned and the current task will be notified by a waker. Note that on multiple calls to poll_accept, only the Waker from the Context passed to the most recent call is scheduled to receive a wakeup.
+    pub fn poll_accept(&self, cx: &mut Context<'_>) -> Poll<Result<(TcpStream, SocketAddr)>> {
         loop {
             let maybe_accept = World::current(|world| {
                 let host = world.current_host_mut();
@@ -71,10 +85,12 @@ impl TcpListener {
             });
 
             if let Some(accepted) = maybe_accept {
-                return Ok(accepted);
+                return Poll::Ready(Ok(accepted));
             }
 
-            self.notify.notified().await;
+            let notified = self.notify.notified();
+            pin_mut!(notified);
+            ready!(notified.poll(cx));
         }
     }
 
